@@ -1,7 +1,7 @@
 # import math
 from pid import PID
 from yaw_controller import YawController
-# from lowpass import LowPassFilter
+from lowpass import LowPassFilter
 GAS_DENSITY = 2.858
 ONE_MPH = 0.44704
 
@@ -23,13 +23,12 @@ class Controller(object):
         self.linear_pid = PID(kp = 0.8, ki = 0, kd = 0.05, mn = self.decel_limit, mx = 0.5 * self.accel_limit)
         self.yaw_controller = YawController(self.wheel_base, self.steer_ratio, min_speed, self.max_lat_accel, self.max_steer_angle)
         self.steering_pid = PID(kp = 0.15, ki = 0.001, kd = 0.1, mn = -self.max_steer_angle, mx = self.max_steer_angle)
-        # self.filter = LowPassFilter(0.2, 0.1)
+        self.filter = LowPassFilter(0.2, 0.1)
 
     def control(self, targ_lin_vel, targ_ang_vel, curr_lin_vel, cross_track_err, dura_secs):
         # DONE: Change the arg, kwarg list to suit your needs
         # Return throttle, brake, steer
         lin_vel_err = targ_lin_vel - curr_lin_vel
-
         vel_correct = self.linear_pid.step(lin_vel_err, dura_secs)
 
         brake = 0
@@ -41,13 +40,13 @@ class Controller(object):
             throttle = 0
 
         predict_steering = self.yaw_controller.get_steering(targ_lin_vel, targ_ang_vel, curr_lin_vel)
-        correct_steering = self.steering_pid.step(cross_track_err, dura_secs)
+        #correct_steering = self.steering_pid.step(cross_track_err, dura_secs)
 
-        # filtered_steering = self.filter.filt(predict_steering)
-        steering = predict_steering + correct_steering
+        filtered_steering = self.filter.filt(predict_steering)
+        #steering = predict_steering + correct_steering
 
-        return throttle, brake, steering
-        # return throttle, brake, filtered_steering
+        #return throttle, brake, steering
+        return throttle, brake, filtered_steering
 
     def reset(self):
         self.linear_pid.reset()

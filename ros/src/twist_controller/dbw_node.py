@@ -8,6 +8,8 @@ from styx_msgs.msg import Lane
 from twist_controller import Controller
 from dbw_mkz_msgs.msg import ThrottleCmd, SteeringCmd, BrakeCmd, SteeringReport
 from geometry_msgs.msg import TwistStamped, PoseStamped
+#import pydevd
+#pydevd.settrace('localhost', port=2356, stdoutToServer=True, stderrToServer=True)
 
 '''
 You can build this node only after you have built (or partially built) the `waypoint_updater` node.
@@ -80,7 +82,9 @@ class DBWNode(object):
         self.dbw_sub = rospy.Subscriber('/vehicle/dbw_enabled', Bool, self.dbw_enabled_callback, queue_size = 1)
         self.final_wp_sub = rospy.Subscriber('final_waypoints', Lane, self.final_waypoints_cb, queue_size = 1)
         self.pose_sub = rospy.Subscriber('/current_pose', PoseStamped, self.current_pose_cb, queue_size = 1)
-        
+        self.v_error = 0
+        self.a_error =0
+        self.interations =0
         self.loop()
     
     
@@ -100,8 +104,18 @@ class DBWNode(object):
                 self.previous_loop_time = ros_time
                 
                 curr_lin_vel = self.current_velocity.twist.linear.x
+                curr_ang     = self.current_velocity.twist.angular.z
                 targ_lin_vel = self.proposed_velocity.twist.linear.x
                 targ_ang_vel = self.proposed_velocity.twist.angular.z
+
+                self.v_error += abs(curr_lin_vel - targ_lin_vel)
+                self.a_error += abs(targ_ang_vel - curr_ang)
+
+
+
+                if  self.interations == 20000 :
+                    rospy.logdebug("Accumulate linear velocity error " + str(self.v_error) +
+                                  " Accumulate angular velocity error " + str(self.a_error))
                 
                 """
                 The final waypoints are used to fit a polynomial which represents the trajectory that the car is expected to take
@@ -114,43 +128,46 @@ class DBWNode(object):
                 We will transform world coordinates to car coordinates so that all x values are in the direction of the car and
 		        all y values represent lateral movement
                 """
-                origin = self.final_waypoints[0].pose.pose.position
+                # origin = self.final_waypoints[0].pose.pose.position
+                #
+                # # Given a list of waypoints, returns a list of [x,y] coordinates associated with those wp.
+                # wp_matrix = list(map(lambda waypoint: [waypoint.pose.pose.position.x, waypoint.pose.pose.position.y], self.final_waypoints))
+                #
+                # # Convert the coordinates [x,y] in the world view to the car's coordinate.
+                # # Shift the points to the origin.
+                # shifted_matrix = wp_matrix - np.array([origin.x, origin.y])
+                #
+                # # Derive an angle by which to rotate the points.
+                # offset = 11
+                # angle = np.arctan2(shifted_matrix[offset, 1], shifted_matrix[offset, 0])
+                # rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)],
+                #                             [np.sin(angle), np.cos(angle)]])
+                #
+                # rotated_matrix = np.dot(shifted_matrix, rotation_matrix)
+                #
+                # # Fit a 2 degree polynomial to the waypoints.
+                # degree = 2
+                # coefficients = np.polyfit(rotated_matrix[:, 0], rotated_matrix[:, 1], degree)
+                #
+                # # Transform the current pose of the car to be in the car's coordinate system.
+                # shifted_pose = np.array([self.current_pose.pose.position.x - origin.x, self.current_pose.pose.position.y - origin.y])
+                # rotated_pose = np.dot(shifted_pose, rotation_matrix)
+                #
+                # expected_y_value = np.polyval(coefficients, rotated_pose[0])
+                # actual_y_value = rotated_pose[1]
+                #
+                # cross_track_err = expected_y_value - actual_y_value
                 
-                # Given a list of waypoints, returns a list of [x,y] coordinates associated with those wp.
-                wp_matrix = list(map(lambda waypoint: [waypoint.pose.pose.position.x, waypoint.pose.pose.position.y], self.final_waypoints))
-                
-                # Convert the coordinates [x,y] in the world view to the car's coordinate.
-                # Shift the points to the origin.
-                shifted_matrix = wp_matrix - np.array([origin.x, origin.y])
-                
-                # Derive an angle by which to rotate the points.
-                offset = 11
-                angle = np.arctan2(shifted_matrix[offset, 1], shifted_matrix[offset, 0])
-                rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)],
-                                            [np.sin(angle), np.cos(angle)]])
-                
-                rotated_matrix = np.dot(shifted_matrix, rotation_matrix)
-                
-                # Fit a 2 degree polynomial to the waypoints.
-                degree = 2
-                coefficients = np.polyfit(rotated_matrix[:, 0], rotated_matrix[:, 1], degree)
-                
-                # Transform the current pose of the car to be in the car's coordinate system.
-                shifted_pose = np.array([self.current_pose.pose.position.x - origin.x, self.current_pose.pose.position.y - origin.y])
-                rotated_pose = np.dot(shifted_pose, rotation_matrix)
-                
-                expected_y_value = np.polyval(coefficients, rotated_pose[0])
-                actual_y_value = rotated_pose[1]
-                
-                cross_track_err = expected_y_value - actual_y_value
-                
-                throttle, brake, steering = self.controller.control(targ_lin_vel, targ_ang_vel, curr_lin_vel, cross_track_err, dura_secs)
+                throttle, brake, steering = self.controller.control(targ_lin_vel, targ_ang_vel, curr_lin_vel, None, dura_secs)
                 
                 if not self.is_dbw_enabled or abs(self.current_velocity.twist.linear.x) < 1e-5 and abs(self.proposed_velocity.twist.linear.x) < 1e-5:
                     self.controller.reset()
                 
                 if self.is_dbw_enabled:
                     self.publish(throttle, brake, steering)
+
+
+                self.interations +=1
             
             rate.sleep()
     
