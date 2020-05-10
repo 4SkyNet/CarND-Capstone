@@ -46,6 +46,7 @@ debug = True
 MAX_JERK  = 10 # m/s2
 MAX_ACC   = 10 # m/s3
 
+
 class WaypointUpdater(object):
     def __init__(self):
         rospy.init_node('waypoint_updater', log_level=rospy.INFO)
@@ -121,7 +122,7 @@ class WaypointUpdater(object):
                 # Get ego car variables.
                 ego_x = self.current_pose.position.x
                 ego_y = self.current_pose.position.y
-                ego_theta = math.atan2(self.current_pose.orientation.y, self.current_pose.orientation.x)
+
                 
                 # If we do have a next_waypoint, we start looking from it, and we stop looking as soon as we get a local minimum. Otherwise we do a full search across the whole track.
                 t = time.time()
@@ -148,9 +149,7 @@ class WaypointUpdater(object):
                         dist = wp_d
                         wp = idx_i
                         
-                        if debug:
-                            # Angle between car heading and waypoint heading.
-                            yaw = math.atan2(wp_y - ego_y, wp_x - ego_x) - ego_theta
+
                     
                     elif not full_search:
                         # Local minimum. If the waypoint makes sense, just use it and break.
@@ -179,9 +178,14 @@ class WaypointUpdater(object):
             # 2. Generate the list of next LOOKAHEAD_WPS waypoints
             num_base_wp = len(self.base_waypoints)
             last_base_wp = num_base_wp - 1
-            waypoint_idx = [idx % num_base_wp for idx in range(self.next_waypoint, self.next_waypoint + LOOKAHEAD_WPS)]
+            if num_base_wp < ( self.next_waypoint + LOOKAHEAD_WPS) :
+                waypoint_idx = range(self.next_waypoint,num_base_wp)
+            else:
+                waypoint_idx = range(self.next_waypoint, self.next_waypoint + LOOKAHEAD_WPS)
+
+            #waypoint_idx = [idx % num_base_wp for idx in range(self.next_waypoint, self.next_waypoint + LOOKAHEAD_WPS)]
             final_wps = [self.base_waypoints[wp] for wp in waypoint_idx]
-            
+           # final_wps = self.base_waypoints[waypoint_idx]
             # 3. If there is a red light ahead, update velocity for them
             if self.stop_on_red:
                 # Start from original velocities
@@ -221,35 +225,35 @@ class WaypointUpdater(object):
                     v = self.get_waypoint_velocity(final_wps, 0)
                     rospy.loginfo("Target velocity: %.1f, RL:%s wps ahead.", v, str(red_idx))
             
-            # 3b. If we are close to the end of the circuit, make sure that we stop there.
-            if self.force_stop_on_last_waypoint or self.base_wp_orig_v[-1] < 1e-5:
-                try:
-                    last_wp_idx = waypoint_idx.index(last_base_wp)
-                    # Decelerates within a waypoint list so that it can stop at last_wp_idx.
-                    if last_wp_idx <= 0:
-                        pass
-                    
-                    else:
-                        dist = self.distance(final_wps, 0, last_wp_idx)
-                        step = dist / last_wp_idx
-                        # Generate waypoint velocity by traversing the waypoint list backwards:
-                        #  - Everything beyond last_wp_idx will have velocity = 0.
-                        #  - Before that, constant (de)cceleration is applied until reaching previous waypoint velocity.
-                        # We assume constant distance between consecutive waypoints for simplicity.
-                        v = 0.0
-                        d = 0.0
-                        for idx_dis in reversed(range(len(final_wps))):
-                            if idx_dis < last_wp_idx:
-                                d += step
-                                if d > self.stop_distance:
-                                    v = math.sqrt(2 * abs(self.accel) * (d - 0))
-                            
-                            if v < self.get_waypoint_velocity(final_wps, idx_dis):
-                                self.set_waypoint_velocity(final_wps, idx_dis, v)
-                
-                except ValueError:
-                    # Last waypoint is not one of the next LOOKAHEAD_WPS.
-                    pass
+            # 3b. If we are close to she end of the circuit, make sure that we stop there.
+            # if self.force_stop_on_last_waypoint or self.base_wp_orig_v[-1] < 1e-5:
+            #     try:
+            #         last_wp_idx = last_base_wp
+            #         # Decelerates within a waypoint list so that it can stop at last_wp_idx.
+            #         if last_wp_idx <= 0:
+            #             pass
+            #
+            #         else:
+            #             dist = self.distance(final_wps, 0, last_wp_idx)
+            #             step = dist / last_wp_idx
+            #             # Generate waypoint velocity by traversing the waypoint list backwards:
+            #             #  - Everything beyond last_wp_idx will have velocity = 0.
+            #             #  - Before that, constant (de)cceleration is applied until reaching previous waypoint velocity.
+            #             # We assume constant distance between consecutive waypoints for simplicity.
+            #             v = 0.0
+            #             d = 0.0
+            #             for idx_dis in reversed(range(len(final_wps))):
+            #                 if idx_dis < last_wp_idx:
+            #                     d += step
+            #                     if d > self.stop_distance:
+            #                         v = math.sqrt(2 * abs(self.accel) * (d - 0))
+            #
+            #                 if v < self.get_waypoint_velocity(final_wps, idx_dis):
+            #                     self.set_waypoint_velocity(final_wps, idx_dis, v)
+            #
+            #     except ValueError:
+            #         # Last waypoint is not one of the next LOOKAHEAD_WPS.
+            #         pass
             
             # 4. Publish waypoints to "/final_waypoints".
             wp_msg = Lane()
@@ -277,30 +281,30 @@ class WaypointUpdater(object):
         wps = msg.waypoints
         num_wp = len(wps)
         
-        if self.base_waypoints and self.next_waypoint is not None:
-            # Normally we assume that waypoint list doesn't change or at least, not in the position where the car is located. If that happens, just handle it.
-            # Compare two waypoints to see if they are the same.
-            max_d = 0.5 # Distance
-            max_v = 0.5 # Velocity
-            
-            dl = lambda a, b: math.sqrt((a.x  - b.x)**2 + (a.y - b.y)**2  + (a.z - b.z)**2)
-            ddif = dl(self.base_waypoints[self.next_waypoint].pose.pose.position, wps[self.next_waypoint].pose.pose.position)
-            if ddif < max_d:
-                is_same_wp = True
-            
-            else:
-                is_same_wp = False
-            
-            if not is_same_wp:
-                # We can't assume to know the previous waypoint.
-                self.next_waypoint = None
-                # Just to debug. It will be updated later.
-                self.base_waypoints = None
-                rospy.logwarn("Base waypoint list changed.")
-        
-        else:
-            # There's no change. We could probably come back here.
-            pass
+        # if self.base_waypoints and self.next_waypoint is not None:
+        #     # Normally we assume that waypoint list doesn't change or at least, not in the position where the car is located. If that happens, just handle it.
+        #     # Compare two waypoints to see if they are the same.
+        #     max_d = 0.5 # Distance
+        #     max_v = 0.5 # Velocity
+        #
+        #     dl = lambda a, b: math.sqrt((a.x  - b.x)**2 + (a.y - b.y)**2  + (a.z - b.z)**2)
+        #     ddif = dl(self.base_waypoints[self.next_waypoint].pose.pose.position, wps[self.next_waypoint].pose.pose.position)
+        #     if ddif < max_d:
+        #         is_same_wp = True
+        #
+        #     else:
+        #         is_same_wp = False
+        #
+        #     if not is_same_wp:
+        #         # We can't assume to know the previous waypoint.
+        #         self.next_waypoint = None
+        #         # Just to debug. It will be updated later.
+        #         self.base_waypoints = None
+        #         rospy.logwarn("Base waypoint list changed.")
+        #
+        # else:
+        #     # There's no change. We could probably come back here.
+        #     pass
         
         # Uncomment for debug.
         # Stamp waypoint index in PoseStamped and TwistStamped headers of internal messages.

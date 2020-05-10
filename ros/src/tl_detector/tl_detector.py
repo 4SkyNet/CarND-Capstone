@@ -14,17 +14,19 @@ import math
 import sys
 import numpy as np
 import time
+from tf.transformations import euler_from_quaternion, quaternion_from_euler,quaternion_matrix
+
 
 DISPLAY_CAMERA = False
 MEASURE_PERFORMANCE = False
 
 ProcessingTimeSum = 0
 ProcessingIterations = 0
-
+#pydevd.settrace('localhost', port=2356, stdoutToServer=True, stderrToServer=True)
 
 class TLDetector(object):
     def __init__(self):
-        self.log_level = rospy.INFO  # rospy.DEBUG | rospy.INFO
+        self.log_level = rospy.INFO # rospy.DEBUG | rospy.INFO
         rospy.init_node('tl_detector', log_level=self.log_level)
 
         self.pose = None
@@ -34,6 +36,8 @@ class TLDetector(object):
 
         sub1 = rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         self.sub2 = rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
+        sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
+        sub6 = rospy.Subscriber('/image_color', Image, self.image_cb, queue_size=1)
 
         '''
         /vehicle/traffic_lights provides you with the location of the traffic light in 3D map space and
@@ -56,13 +60,11 @@ class TLDetector(object):
         self.state_count = 0
 
         self.upcoming_red_light_pub = rospy.Publisher('/traffic_waypoint', Int32, queue_size=1)
-        sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
-        sub6 = rospy.Subscriber('/image_color', Image, self.image_cb, queue_size=1)
-
         rospy.spin()
 
     def pose_cb(self, msg):
         self.pose = msg.pose
+        #rospy.loginfo( 'orientation:'+str(msg.pose.orientation))
 
     def waypoints_cb(self, waypoints):
         self.waypoints = waypoints.waypoints
@@ -139,10 +141,10 @@ class TLDetector(object):
         position = np.asarray([position_x, position_y])
         dist_squared = np.sum((self.waypoints_array - position)**2, axis=1)
         index = np.argmin(dist_squared)
-        rospy.logdebug(
-            'tl.detector.get_closest_waypoint({}) found at = {}, distance = {}, time = {}'
-            .format(position, index, np.sqrt(dist_squared[index]), time.time())  # should -start_time
-        )
+        #rospy.logdebug(
+         #   'tl.detector.get_closest_waypoint({}) found at = {}, distance = {}, time = {}'
+        #    .format(position, index, np.sqrt(dist_squared[index]), time.time())  # should -start_time
+      #  )
 
         return index
 
@@ -183,7 +185,7 @@ class TLDetector(object):
 
         # Use tranform and rotation to calculate 2D position of light in image
 
-        point_in_world_z = 1  # Does not work with correct z value
+        #point_in_world_z = 1  # Does not work with correct z value
         world_point = np.array([point_in_world_x, point_in_world_y, point_in_world_z]).reshape(1,3,1)
 
         camera_mat = np.matrix([[fx, 0,  image_width/2],
@@ -194,7 +196,9 @@ class TLDetector(object):
         # 4x1 -> quaternion to rotation matrix at z-axis
         rot_vec, _ = cv2.Rodrigues(self.QuaterniontoRotationMatrix(rot))
         ret, _ = cv2.projectPoints(world_point, rot_vec, np.array(trans).reshape(3,1), camera_mat, dist_coeff)
-
+        proj = camera_mat * (
+                                ( quaternion_matrix(rot)[0:3,0:3]) * world_point.reshape(3, 1) + np.array(trans).reshape(3, 1))
+        proj = proj / proj[2,0]
         # Unpack values and return
         ret = ret.reshape(2,)
 
@@ -260,18 +264,18 @@ class TLDetector(object):
 
         cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "bgr8")
 
-        visible, x, y = self.project_to_image_plane(light_pos_x, light_pos_y, light_pos_z)
+        #visible, x, y = self.project_to_image_plane(light_pos_x, light_pos_y, light_pos_z)
 
         # Show car image
         if DISPLAY_CAMERA:
             image_tmp = np.copy(cv_image)
             # Draw a circle
-            cv2.circle(image_tmp, (x,y), 20, (255, 0, 0), thickness=2)
+            #cv2.circle(image_tmp, (x,y), 20, (255, 0, 0), thickness=2)
             cv2.imshow('image', image_tmp)
             cv2.waitKey(1)
 
         state = TrafficLight.UNKNOWN
-        if visible:
+        if True:
             # TODO use light location to zoom in on traffic light in image
 
             # Get classification
@@ -280,22 +284,32 @@ class TLDetector(object):
         # Return state
         return state
 
-    def get_nearest_traffic_light(self, waypoint_start_index):
-        traffic_light = None
-        traffic_light_positions = self.config['light_positions']
-        # traffic_light_positions = self.config['manual_light_positions']
-        last_index = sys.maxsize
 
-        # TODO: Only one complete circle, no minimum distance considered, yet
-        for i in range(0, len(traffic_light_positions)):
-            index = self.get_closest_waypoint(
-                float(traffic_light_positions[i][0]), float(traffic_light_positions[i][1])
-            )
-            if waypoint_start_index < index < last_index:
-                last_index = index
-                traffic_light = traffic_light_positions[i]
+    def get_nearest_traffic_light2(self, car_x, car_y):
+         d =1000000000
+         near_light_idx = None
+         light_x = None
+         light_y = None
+         light_idx = None
 
-        return traffic_light, last_index
+         head_vec =self.QuaterniontoRotationMatrix((self.pose.orientation.x, self.pose.orientation.y,
+                                     self.pose.orientation.z, self.pose.orientation.w)) * \
+         np.array([1,0,0]).reshape(3,1)
+         dis_max_squared = 600*600
+         min_light =None
+         for idx, light in enumerate( self.config['light_positions']):
+              new_dis =(light[0] -car_x)**2 + (light[1]-car_y)**2
+              light_head_x = light[0] - self.pose.position.x
+              light_head_y = light[1] - self.pose.position.y
+              n = normalize(np.array([light_head_x,light_head_y]))
+              dot = np.dot(np.array([head_vec[0,0], head_vec[1,0]]), n)
+              if  new_dis < d   and dot > 0 and new_dis < dis_max_squared:
+                  d = new_dis
+                  light_x = light[0]
+                  light_y = light[1]
+                  min_light = light
+         return  light_x, light_y, min_light
+
 
     def process_traffic_lights(self):
         """Finds closest visible traffic light, if one exists, and determines its
@@ -306,42 +320,50 @@ class TLDetector(object):
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
 
         """
+
         if self.pose:
             # find the closest visible traffic light (if one exists)
-            car_position = self.get_closest_waypoint(self.pose.position.x, self.pose.position.y)
 
-            light_pos = None
-            if car_position > 0:
-                light_pos, light_waypoint = self.get_nearest_traffic_light(car_position)
+            light_x, light_y, light_pos = self.get_nearest_traffic_light2(self.pose.position.x, self.pose.position.y)
+            if light_x:
+                light_waypoint = self.get_closest_waypoint(light_x, light_y)
+            else:
+                light_waypoint = None
 
-                if light_pos:
-                    rospy.logdebug(
-                        "Next traffic light ahead from waypoint " + str(car_position) +
-                        " is at position " + str(light_pos) + " at waypoint " + str(light_waypoint)
+            if light_pos:
+                rospy.logdebug(
+                       "Next traffic light ahead from waypoint " + str(self.pose.position) +
+                       " is at position " + str(light_pos) + " at waypoint " + str(light_waypoint))
+                state = TrafficLight.UNKNOWN
+                if rospy.get_param('~use_classifier', False):
+                    state = self.get_light_state(
+                        light_pos[0], light_pos[1], light_pos[2] if len(light_pos) >= 3 else 0.
                     )
-                    state = TrafficLight.UNKNOWN
-                    if rospy.get_param('~use_classifier', False):
-                        state = self.get_light_state(
-                            light_pos[0], light_pos[1], light_pos[2] if len(light_pos) >= 3 else 0.
-                        )
-                    else:
-                        for light in self.lights:
-                            ''' If position of the light from the yaml file and one roperted via
-                                /vehicle/traffic_lights differs only within 30 m consider them as same '''
-                            if self.euclidianDistance(
-                                    light.pose.pose.position.x, light.pose.pose.position.y,
-                                    light_pos[0], light_pos[1]
-                            ) < 30:
-                                # state = self.get_light_state(
-                                # light.pose.pose.position.x,
-                                # light.pose.pose.position.y,
-                                # light.pose.pose.position.z
-                                # )
-                                state = light.state
+                else:
+                    for light in self.lights:
+                        ''' If position of the light from the yaml file and one reported via
+                            /vehicle/traffic_lights differs only within 30 m consider them as same '''
+                        if self.euclidianDistance(
+                                light.pose.pose.position.x, light.pose.pose.position.y,
+                                light_pos[0], light_pos[1]
+                        ) < 30:
+                            # state = self.get_light_state(
+                            # light.pose.pose.position.x,
+                            # light.pose.pose.position.y,
+                            # light.pose.pose.position.z
+                            # )
+                            state = light.state
 
-                    return light_waypoint, state
+                return light_waypoint, state
 
         return -1, TrafficLight.UNKNOWN
+
+def normalize(v):
+    norm = np.linalg.norm(v)
+    if norm == 0:
+       return v
+    return v / norm
+
 
 
 if __name__ == '__main__':
